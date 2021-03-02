@@ -220,4 +220,4 @@ stargazer(logit1, logit2, logit3, type = "text",
 In the new regression model, the effect of expert now becomes positive, same as that of the CDC official, showing that people have a consistent view and support towards the relative neutral technocrat/expert, which is expected. Also, the two interaction term is negative, possibly because of a counter-effect brought by overemphasizing the health framing amid a economic crisis. The most important is the interaction term of president*gop. It indicates a strong bi-party polarization in the US. If gop is zero, the conditional effect of president as the messenger (pres_m) is negative, meaning that non-GOP American do not trust what Trump says. However, if gop is one, the interaction term can outweigh the negative coefficient of pres_m (0.441-0.262 > 0), turning the conditional effect of president as the messenger as positive. However, the improvement in the AIC score on the new model 3 is limited. 
 
 
-This file can be retrieved from 
+This file can be retrieved from https://github.com/sap98fcs/MLHW1/edit/main/HW1.Rmd.
