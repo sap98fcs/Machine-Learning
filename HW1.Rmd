@@ -1,0 +1,223 @@
+---
+title: "597 HW1"
+author: "Gary Fong"
+date: "2021/3/1"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+options(repos=structure(c(CRAN="http://cran.r-project.org")))
+install.packages("mlr")
+install.packages("tidyverse")
+install.packages("stargazer")
+install.packages("caroline")
+install.packages("MLmetrics")
+
+library(mlr)
+library(tidyverse)
+library(stargazer)
+library(caroline)
+library(MLmetrics)
+
+```
+
+## Q1 
+This data of this homework comes from a recently published article - Deslatte, A. (2020). To shop or shelter? Issue framing effects and social-distancing preferences in the COVID-19 pandemic. Journal of Behavioral Public Administration, 3(1). https://doi.org/10.30636/jbpa.31.158.
+The paper can be downloaded here http://www.journal-bpa.org/index.php/jbpa/article/download/158/74.
+
+In this paper, the author aims to study the effectiveness of dissemination of public-health information regarding COVID-19 through different framing and messengers. The author conducts a survey experiment with random treatment using a 2x5 factorial design. In the survey, the author first presents an message on social distancing with 5 different versions of messenger(s) by random assignment - Donald Trump, CDC officials, Government officials, a health expert from Johns Hopkins University, and no identified messenger as control. Then the respondents are randomly assign to receive one of the two messages on framing, one saying that if people shop more, employers and workers will be less financially hurt, and another one saying that if people shop less, fewer people will be infected and dead. Finally, the respondent are asked will they choose to shop or to wait until their food or household supplies have been exhausted, given that the local stores are well-stocked but too crowded. 
+
+In the data, the are four dummy variables indicating who is the identifiable messenger(s), and a dummy variable on which frame is being used (1 - health frame). There are four more variables presenting the interaction between framing and the types of messengers. There are also a list of covariates, having shelter(1 = yes), experiencing job-loss(1 = yes), gender (1 = male), race (1 = white), education (5 levels), GOP membership (1 = yes), and degree to which government should be responsible for coordinating the response to pandemics (in %). Finally, there is an outcome binary variable on whether going to shop now or wait (1 = wait). 
+
+The results of the main regression table (Table 2, p.7) is replicated as below:
+ 
+```{r, warning=FALSE}
+#read the data
+data <- read.tab("https://raw.githubusercontent.com/sap98fcs/MLHW1/main/data.tab", stringsAsFactors = FALSE,  quote = "", header=TRUE)
+
+#turn the outcome variable as facotr
+data$no_shop <- as.factor(data$no_shop)
+
+#base model
+logit1 <- glm(no_shop ~ cdc_m+pres_m+state_m+expert_m+health_frame+shelter+jobloss+gender+ideology_rs+white+education+gop, data = data, family = "binomial")
+
+#interaction model
+logit2 <- glm(no_shop ~ cdc_m+pres_m+state_m+expert_m+health_frame+shelter+jobloss+gender+ideology_rs+white+education+gop+cdc_frame_h+expert_frame_h+pres_frame_h+state_frame_h, data = data, family = "binomial")
+
+stargazer(logit1, logit2, type = "text",
+          dep.var.caption = "Dependent variables:",
+          dep.var.labels = c("noshop"))
+```
+
+## Q2
+```{r, message=FALSE, warning=FALSE}
+#split the data 
+set.seed(123)
+train_rows <- sample(seq_len(nrow(data)), nrow(data)*0.7)
+train_data <- data[train_rows, ]
+test_data <- data[-train_rows, ]
+
+#setting the tasks for the two models
+covid1 <- makeClassifTask(data = train_data[1:13,], target = "no_shop")
+covid2 <- makeClassifTask(data = train_data[1:17,], target = "no_shop")
+
+#define learning and cross-validation method
+logReg <- makeLearner("classif.logreg", predict.type = "prob")
+kFold <- makeResampleDesc(method = "RepCV", folds = 5, reps = 10)
+
+#cross-validation of the two old models
+logReg1CV <- resample(logReg, covid1,
+                             resampling = kFold,
+                             measures = list(acc))
+
+logReg2CV <- resample(logReg, covid2,
+                      resampling = kFold,
+                      measures = list(acc))
+```
+```{r}
+# report the accuracy
+
+print(paste("The accurary of model 1 is ",logReg1CV$aggr))  
+print(paste("The accurary of model 2 is ",logReg2CV$aggr))  
+
+```
+
+From the results of the cross-validation, we can see that the more complicated model has less predictive power.I then specifies a new model by dropping the two interaction terms between framing and Trump/Official as messenger, and add one more interactive term of Trump*GOP.
+
+```{r, message=FALSE, warning=FALSE}
+train_data2 <- subset(train_data, select = c(1:13,14,17))
+train_data2$GOP_Trump <- train_data2$pres_m*train_data2$gop
+
+covid3 <- makeClassifTask(data = train_data2, target = "no_shop")
+logReg3CV <- resample(logReg, covid3,
+                      resampling = kFold,
+                      measures = list(acc))
+
+```
+```{r}
+# report the accuracy
+
+print(paste("The accurary of model 3 is ",logReg3CV$aggr))  
+
+```
+
+There are two assumptions on the modification. First, there should be no interaction effects between the so-called authoritative messengers (President and government official) and framing, as both of them are not an expert on economics or public health. Second, given the political polarization in the US, being a GOP member or not will strongly affect their perception on what Trump says. I believe this improvement reflects a better model-fit to the true data generating process. This also explains why the base model has a better predictive performance than the complex model - by dropping the interaction terms, the amount of noise in the model is reduced.
+
+## Q3
+```{r, warning=FALSE}
+#Train the three models 
+logRegModel1 <- train(logReg, covid1)
+logRegModel2 <- train(logReg, covid2)
+logRegModel3 <- train(logReg, covid3)
+
+#do prediction
+predict_model1 <- as_tibble(predict(logRegModel1, newdata = test_data))
+predict_model2 <- as_tibble(predict(logRegModel2, newdata = test_data))
+
+test_data2 <- subset(test_data, select = c(1:13,14,17))
+test_data2$GOP_Trump <- test_data2$pres_m*test_data2$gop
+predict_model3 <- as_tibble(predict(logRegModel3, newdata = test_data2))
+
+#calculating the accuracy 
+predict_model1 <- predict_model1 %>%
+  mutate(correct = case_when(
+    truth == response ~ 1,
+    truth != response ~ 0
+  ))
+acc_model1 <- sum(predict_model1$correct)/nrow(predict_model1)
+
+predict_model2 <- predict_model2 %>%
+  mutate(correct = case_when(
+    truth == response ~ 1,
+    truth != response ~ 0
+  ))
+acc_model2 <- sum(predict_model2$correct)/nrow(predict_model2)
+ 
+predict_model3 <- predict_model3 %>%
+  mutate(correct = case_when(
+    truth == response ~ 1,
+    truth != response ~ 0
+  ))
+acc_model3 <- sum(predict_model3$correct)/nrow(predict_model3)
+
+print(paste("The predictive accurary of model 1 is ",acc_model1))  
+print(paste("The predictive accurary of model 2 is ",acc_model2))  
+print(paste("The predictive accurary of model 3 is ",acc_model3))  
+
+```
+
+Comparing the accuracy of the three models in predicting the test set, again the new model has a higher accuracy, followed by the base-line model. It confirms the finding in Q2.
+
+```{r, warning=FALSE}
+
+#False Positive Rate
+#first, create a variable that identifies everything that was true 0, but classified as 1
+predict_model1 <- predict_model1 %>%
+  mutate(fp = case_when(
+    (truth == 0 & response == 1) ~ 1,
+    (truth == 1 | response == 0) ~ 0
+  ))
+
+predict_model2 <- predict_model2 %>%
+  mutate(fp = case_when(
+    (truth == 0 & response == 1) ~ 1,
+    (truth == 1 | response == 0) ~ 0
+  ))
+
+predict_model3 <- predict_model3 %>%
+  mutate(fp = case_when(
+    (truth == 0 & response == 1) ~ 1,
+    (truth == 1 | response == 0) ~ 0
+  ))
+
+#True Positive Rate (Recall) and Precision 
+
+#first, create a variable that identifies everything that was true 1, and also classified as 1
+predict_model1 <- predict_model1 %>%
+  mutate(tp = case_when(
+    (truth == 1 & response == 1) ~ 1,
+    (truth == 0 | response == 0) ~ 0
+  ))
+
+predict_model2 <- predict_model2 %>%
+  mutate(tp = case_when(
+    (truth == 1 & response == 1) ~ 1,
+    (truth == 0 | response == 0) ~ 0
+  ))
+
+predict_model3 <- predict_model3 %>%
+  mutate(tp = case_when(
+    (truth == 1 & response == 1) ~ 1,
+    (truth == 0 | response == 0) ~ 0
+  ))
+
+# Area under ROC curve
+print(paste("The area under ROC curve of model 1 is ",AUC(y_pred = predict_model1$prob.1,y_true=predict_model1$truth)))
+print(paste("The area under ROC curve of model 2 is ",AUC(y_pred = predict_model2$prob.1,y_true=predict_model2$truth)))  
+print(paste("The area under ROC curve of model 3 is ",AUC(y_pred = predict_model3$prob.1,y_true=predict_model3$truth)))  
+
+# Area under precision-recall curve
+print(paste("The area under PR curve of model 1 is ",PRAUC(y_pred = predict_model1$prob.1,y_true=predict_model1$truth)))
+print(paste("The area under PR curve of model 2 is ",PRAUC(y_pred = predict_model2$prob.1,y_true=predict_model2$truth)))  
+print(paste("The area under PR curve of model 3 is ",PRAUC(y_pred = predict_model3$prob.1,y_true=predict_model3$truth)))
+```
+Comparing the area under the ROC and PR curve, again my model has the highest performance.
+
+## Q4
+```{r, warning=FALSE}
+
+logit3 <- glm(no_shop ~ cdc_m+pres_m+state_m+expert_m+health_frame+shelter+jobloss+gender+ideology_rs+white+education+gop+cdc_frame_h+expert_frame_h+gop*pres_m, data = data, family = "binomial")
+
+stargazer(logit1, logit2, logit3, type = "text",
+          dep.var.caption = "Dependent variables:",
+          dep.var.labels = c("noshop"))
+```
+
+In the new regression model, the effect of expert now becomes positive, same as that of the CDC official, showing that people have a consistent view and support towards the relative neutral technocrat/expert, which is expected. Also, the two interaction term is negative, possibly because of a counter-effect brought by overemphasizing the health framing amid a economic crisis. The most important is the interaction term of president*gop. It indicates a strong bi-party polarization in the US. If gop is zero, the conditional effect of president as the messenger (pres_m) is negative, meaning that non-GOP American do not trust what Trump says. However, if gop is one, the interaction term can outweigh the negative coefficient of pres_m (0.441-0.262 > 0), turning the conditional effect of president as the messenger as positive. However, the improvement in the AIC score on the new model 3 is limited. 
+
+
+This file can be retrieved from 
