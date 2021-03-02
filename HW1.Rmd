@@ -2,11 +2,14 @@
 title: "597 HW1"
 author: "Gary Fong"
 date: "2021/3/1"
-output: pdf_document
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=60))
 ```
 
 ```{r, include=FALSE}
