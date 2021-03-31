@@ -1,0 +1,341 @@
+---
+title: "597 HW2"
+author: "Gary Fong"
+date: "2021/3/30"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=60))
+```
+
+```{r, include=FALSE}
+options(repos=structure(c(CRAN="http://cran.r-project.org")))
+install.packages("mlr")
+install.packages("tidyverse")
+install.packages("stargazer")
+install.packages("caroline")
+install.packages("MLmetrics")
+install.packages("randomForest")
+install.packages("parallelMap")
+install.packages("parallel")
+install.packages("knitr")
+install.packages("caret")
+install.packages("e1071")
+install.packages("vip")
+
+
+library(vip)
+library(randomForest)
+library(mlr)
+library(tidyverse)
+library(stargazer)
+library(caroline)
+library(MLmetrics)
+library(parallelMap)
+library(parallel)
+library(knitr)
+library(caret)
+library(ModelMetrics)
+
+
+
+```
+
+## Q1 
+This data of this homework comes from a recently published article - Deslatte, A. (2020). To shop or shelter? Issue framing effects and social-distancing preferences in the COVID-19 pandemic. Journal of Behavioral Public Administration, 3(1). https://doi.org/10.30636/jbpa.31.158.
+The paper can be downloaded here http://www.journal-bpa.org/index.php/jbpa/article/download/158/74. It is the same as the one I used in HW1.
+
+In this paper, the author aims to study the effectiveness of dissemination of public-health information regarding COVID-19 through different framing and messengers. The author conducts a survey experiment with random treatment using a 2x5 factorial design. In the survey, the author first presents an message on social distancing with 5 different versions of messenger(s) by random assignment - Donald Trump, CDC officials, Government officials, a health expert from Johns Hopkins University, and no identified messenger as control. Then the respondents are randomly assign to receive one of the two messages on framing, one saying that if people shop more, employers and workers will be less financially hurt, and another one saying that if people shop less, fewer people will be infected and dead. Finally, the respondent are asked will they choose to shop or to wait until their food or household supplies have been exhausted, given that the local stores are well-stocked but too crowded. 
+
+In the data, the are four dummy variables indicating who is the identifiable messenger(s), and a dummy variable on which frame is being used (1 - health frame). There are four more variables presenting the interaction between framing and the types of messengers. There are also a list of covariates, having shelter(1 = yes), experiencing job-loss(1 = yes), gender (1 = male), race (1 = white), education (5 levels), GOP membership (1 = yes), and degree to which government should be responsible for coordinating the response to pandemics (in %). Finally, there is an outcome binary variable on whether going to shop now or wait (1 = wait). 
+
+The results of the main regression table (Table 2, p.7) is replicated as below:
+ 
+```{r, warning=FALSE}
+#read the data
+data <- read.tab("https://raw.githubusercontent.com/sap98fcs/MLHW1/main/data.tab", stringsAsFactors = FALSE,  quote = "", header=TRUE)
+
+#turn the outcome variable as factor
+data$no_shop <- as.factor(data$no_shop)
+
+#base model
+logit1 <- glm(no_shop ~ cdc_m+pres_m+state_m+expert_m+health_frame+shelter+jobloss+gender+ideology_rs+white+education+gop, data = data, family = "binomial")
+
+#interaction model
+logit2 <- glm(no_shop ~ cdc_m+pres_m+state_m+expert_m+health_frame+shelter+jobloss+gender+ideology_rs+white+education+gop+cdc_frame_h+expert_frame_h+pres_frame_h+state_frame_h, data = data, family = "binomial")
+
+stargazer(logit1, logit2, type = "text",
+          dep.var.caption = "Dependent variables:",
+          dep.var.labels = c("noshop"))
+```
+
+## Q2
+```{r, message=FALSE, warning=FALSE}
+
+#remodel the data by dropping the two interaction terms between framing and Trump/Official as messenger, and add one more interactive term of Trump*GOP. This model has proved to be has better predictive performance as shown in HW1#split the data 
+Fulldata <- subset(data, select = c(1:13,14,17))
+Fulldata$GOP_Trump <- data$pres_m*data$gop
+
+#Split the data 
+
+set.seed(123)
+train_rows <- sample(seq_len(nrow(data)), nrow(data)*0.7)
+train_data <- Fulldata[train_rows, ]
+test_data <- Fulldata[-train_rows, ]
+
+#set the task, and define the learner and cross-validation method
+
+covid <- makeClassifTask(data = test_data, target = "no_shop")
+logReg <- makeLearner("classif.logreg", predict.type = "prob")
+svm <- makeLearner("classif.svm", predict.type = "prob")
+forest <- makeLearner("classif.randomForest", predict.type = "prob")
+
+kFold <- makeResampleDesc(method = "RepCV", folds = 3, reps = 5)
+
+
+#Tune the hyperparameters for SVM
+
+#set the SVM hyperparameters
+kernels <- c("polynomial", "radial", "sigmoid")
+
+svmParamSpace <- makeParamSet(
+  makeDiscreteParam("kernel", values = kernels),
+  makeIntegerParam("degree", lower = 1, upper = 3),
+  makeNumericParam("cost", lower = 0.1, upper = 5),
+  makeNumericParam("gamma", lower = 0.1, 5))
+
+randSearch <- makeTuneControlRandom(maxit = 50)
+
+#Tuning
+parallelStartSocket(cpus = detectCores())
+
+tunedSvmPars <- tuneParams("classif.svm", task = covid,
+                           resampling = kFold,
+                           par.set = svmParamSpace,
+                           control = randSearch)
+
+parallelStop()
+
+
+#Tune the hyperparameters for Random Forest
+
+#set the Random Forest hyperparameters
+forestParamSpace <- makeParamSet(                        
+  makeIntegerParam("ntree", lower = 50, upper = 100),
+  makeIntegerParam("mtry", lower = 5, upper = 16),
+  makeIntegerParam("nodesize", lower = 20, upper = 50),
+  makeIntegerParam("maxnodes", lower = 10, upper = 30))
+
+#Tuning
+parallelStartSocket(cpus = detectCores())
+
+tunedForestPars <- tuneParams("classif.randomForest", task = covid,     
+                              resampling = kFold,    
+                              par.set = forestParamSpace,   
+                              control = randSearch)         
+
+parallelStop()
+
+
+#Cross-validation of the four models
+
+cvForTuning <- makeResampleDesc("Holdout", split = 2/3)
+
+#cross-validation of the logistic model
+logRegCV <- resample("classif.logreg", 
+                     covid,
+                     resampling = cvForTuning,
+                     measures = list(acc))
+
+#cross-validation of the SVM model
+svmWrapper <- makeTuneWrapper("classif.svm", resampling = kFold,
+                              par.set = svmParamSpace,
+                              control = randSearch)
+
+parallelStartSocket(cpus = detectCores())
+
+svmcv <- resample(svmWrapper,
+                  covid, 
+                  resampling = cvForTuning,
+                  measures = list(acc))
+
+parallelStop()
+
+#cross-validation of the Random Forest model
+forestWrapper <- makeTuneWrapper("classif.randomForest",
+                                 resampling = kFold,
+                                 par.set = forestParamSpace,
+                                 control = randSearch)
+
+parallelStartSocket(cpus = detectCores())
+
+forestcv <- resample(forestWrapper, 
+                     covid, 
+                     resampling = cvForTuning,
+                     measures = list(acc))
+
+parallelStop()
+
+#Train and tune the neural network with cross validation
+grid<-expand.grid(size = c(3:8),decay = c(0.05, 0.1, 0.5))
+control<-trainControl("repeatedcv",number=3, repeats = 5)
+
+set.seed(123)
+NNCV<-caret::train(no_shop ~.,
+                     data=train_data, 
+                     metric="Accuracy",
+                     method="nnet",
+                     tuneGrid=grid,
+                     trControl=control,
+                     maxit=100,
+                     trace=FALSE)
+
+#extract the best model from the neural network
+get_best_result = function(caret_fit) {
+  best = which(rownames(caret_fit$results) == rownames(caret_fit$bestTune))
+  best_result = caret_fit$results[best, ]
+  rownames(best_result) = NULL
+  best_result
+}
+
+get_best_result(NNCV)[1,3]
+
+# report the accuracy
+acc1 <- cbind(logRegCV$aggr, svmcv$aggr,forestcv$aggr,get_best_result(NNCV)[1,3])
+colnames(acc1) <- c("Logistic Regression","SVM","Random Forest","Neural Network")
+rownames(acc1) <- "Accuracy"
+kable(acc1, caption="The accurary of models", digits = 4, align ="c" )
+
+```
+
+From Table 1, we can see that the accuracy all four models are very close. Among the four, the logistic regression model performs the best in the cross-validation process, followed by Random Forest, then Neural Network, and finally the SVM.
+
+## Q3
+```{r, warning=FALSE}
+
+#Train the three models 
+logRegModel <- mlr::train(logReg, covid)
+   SVMModel <- mlr::train(setHyperPars(svm, par.vals = tunedSvmPars$x), covid)
+ForestModel <- mlr::train(setHyperPars(forest, par.vals = tunedForestPars$x), covid)
+
+#do prediction
+predict_Log <- predict(logRegModel, newdata = test_data)$data
+predict_SVM <- predict(SVMModel, newdata = test_data)$data
+predict_Forest <- predict(ForestModel, newdata = test_data)$data
+
+predict_NN1 <- predict(NNCV, newdata=test_data, type="prob")
+rownames(predict_NN1) <- 1:404
+predict_NN2 <- as.data.frame(predict(NNCV, newdata=test_data, type="raw"))
+ predict_NN <- cbind(predict_NN1,predict_NN2)
+ colnames(predict_NN) <- c("prob.0","prob.1","response")
+
+#confusion matrix
+confLog <- caret::confusionMatrix(data=predict_Log$response,reference=test_data$no_shop)
+confSVM <- caret::confusionMatrix(data=predict_SVM$response,reference=test_data$no_shop)
+confForest <- caret::confusionMatrix(data=predict_Forest$response,reference=test_data$no_shop)
+confNN <- caret::confusionMatrix(data=predict_NN$response,reference=test_data$no_shop)
+
+#accuracy, Area under ROC curve and Area under PR curve
+acc2 <- cbind(confLog$overall[1] , confSVM$overall[1],confForest$overall[1],confNN$overall[1] )
+
+AUC <- cbind(AUC(y_pred = predict_Log$prob.1,y_true=test_data$no_shop), 
+             AUC(y_pred = predict_SVM$prob.1,y_true=test_data$no_shop),
+             AUC(y_pred = predict_Forest$prob.1,y_true=test_data$no_shop),
+             AUC(y_pred = predict_NN$prob.1,y_true=test_data$no_shop))
+
+PR <- cbind(PRAUC(y_pred = predict_Log$prob.1,y_true=test_data$no_shop),
+            PRAUC(y_pred = predict_SVM$prob.1,y_true=test_data$no_shop),
+            PRAUC(y_pred = predict_Forest$prob.1,y_true=test_data$no_shop),
+            PRAUC(y_pred = predict_NN$prob.1,y_true=test_data$no_shop))
+
+Performance <- rbind(acc2, AUC, PR)
+colnames(Performance) <- c("Logistic Regression","SVM","Random Forest", "Neural Network")
+rownames(Performance) <- c("Accuracy", "ROC_AUC", "PR_AUC")
+kable(Performance, caption="The Performance of the models in Prediction", digits = 4, align ="c" )
+
+```
+
+From Table 2, we can see that the predictive accuracy of the four models are very close. Among the four, the Logistic Regression model again performs the best in the cross-validation process, followed by the SVM and Random Forest, and then the Neural Network. The performance of these models differ quite a bit in terms of the area under the ROC and PR Curve. For area under the ROC curve, Random Forest performs the best, followed by Logistic Regression, Neural Network, and finally SVM. SVM just performs slightly better than a random classifier. For area under the PR curve, Logistic Regression performs the best, followed by Neural Network, SVM, and finally Random Forest. Among the four, the performance of Random Forest is quite stable across different measures.
+
+## Q4
+```{r, warning=FALSE}
+
+#Train the model with the full data
+
+#I train the Logit model using the full data
+        covid2 <- makeClassifTask(data = Fulldata, target = "no_shop")
+LogitFULLModel <- mlr::train(logReg, covid2)
+
+#I use the tuned hyperparameters of the Random Forest to  train a model using the full data
+ForestFULLModel <- mlr::train(setHyperPars(forest, par.vals = tunedForestPars$x), covid2)
+
+#SVM has no built-in importance score, but we can use the area under the ROC curve to rank the importance of the variables in the SVM.
+ctrl <- trainControl(
+  method = "cv", 
+  number = 10, 
+  classProbs = TRUE,                 
+  summaryFunction = twoClassSummary  
+)
+
+
+SVMFulldata <- Fulldata
+SVMFulldata$no_shop <- make.names(Fulldata$no_shop)
+
+set.seed(1234)
+SVMFULLModel <- train(
+  no_shop ~., 
+  data = SVMFulldata,
+  method = "svmLinear",               
+  metric = "ROC",
+  preProcess = c("center", "scale"),  
+  trControl = ctrl,
+  tuneLength = 10
+)
+
+prob_yes <- function(object, newdata) {
+  predict(object, newdata = newdata, type = "prob")[, "X1"]
+}
+
+set.seed(4567)
+vip(SVMFULLModel, method = "permute", nsim = 5, train = SVMFulldata, 
+    target = "no_shop", metric = "auc", reference_class = "X1", 
+    pred_wrapper = prob_yes)
+
+
+Importance_Forest <-getFeatureImportance(ForestFULLModel)$res 
+
+#Neural Network in the caret package also has no built-in importance score, I have to retrain the model using the full data set
+set.seed(123123123)
+NNFULLModel <-caret::train(no_shop ~.,
+                     data=Fulldata, 
+                     metric="Accuracy",
+                     method="nnet",
+                     tuneGrid=grid,
+                     trControl=control,
+                     maxit=100,
+                     trace=FALSE)
+
+
+#I use the vip function to show the importance of variables across models (Top 5)
+
+vip(LogitFULLModel,num_features = 5)
+vip(ForestFULLModel,num_features = 5)
+vip(SVMFULLModel, method = "permute", nsim = 5, train = SVMFulldata, 
+    target = "no_shop", metric = "auc", reference_class = "X1", 
+    pred_wrapper = prob_yes,num_features = 5)
+vip(NNFULLModel,num_features = 5)
+vip(NNCV,num_features = 5) #To compare with the neural network model trained using the test data
+
+
+
+```
+
+Across the five models, gender and health framing, health expert as messenger interact with health framing appear 4 times in the Top 5, education appears 3 times in the Top 5. These features have stronger predictive abilities than other variables. And compare the neural network trained using the full and test data, we can see they share 4 variable in their Top 5, except for gender and health framing. As the importance score is not standardized across models, I would not comment on the relative importance of variables across models. However, given that the 5 models share a lot of variables in their Top 5 important variable, I would say they all more or less rely on these variables when doing prediction and in a sense are similar to each other. 
+
+
+This file can be retrieved from https://github.com/sap98fcs/MLHW1/edit/main/HW2.Rmd.
+
