@@ -14,19 +14,6 @@ knitr::opts_chunk$set(echo = TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=60))
 
 ```{r, include=FALSE}
 options(repos=structure(c(CRAN="http://cran.r-project.org")))
-install.packages("mlr")
-install.packages("tidyverse")
-install.packages("stargazer")
-install.packages("caroline")
-install.packages("MLmetrics")
-install.packages("randomForest")
-install.packages("parallelMap")
-install.packages("parallel")
-install.packages("knitr")
-install.packages("caret")
-install.packages("e1071")
-install.packages("vip")
-
 
 library(vip)
 library(randomForest)
@@ -212,7 +199,7 @@ kable(acc1, caption="The accurary of models", digits = 4, align ="c" )
 
 ```
 
-From Table 1, we can see that the accuracy all four models are very close. Among the four, the logistic regression model performs the best in the cross-validation process, followed by Random Forest, then Neural Network, and finally the SVM.
+From Table 1, we can see that the accuracy all four models are very close.
 
 ## Q3
 ```{r, warning=FALSE}
@@ -259,7 +246,7 @@ kable(Performance, caption="The Performance of the models in Prediction", digits
 
 ```
 
-From Table 2, we can see that the predictive accuracy of the four models are very close. Among the four, the Logistic Regression model again performs the best in the cross-validation process, followed by the SVM and Random Forest, and then the Neural Network. The performance of these models differ quite a bit in terms of the area under the ROC and PR Curve. For area under the ROC curve, Random Forest performs the best, followed by Logistic Regression, Neural Network, and finally SVM. SVM just performs slightly better than a random classifier. For area under the PR curve, Logistic Regression performs the best, followed by Neural Network, SVM, and finally Random Forest. Among the four, the performance of Random Forest is quite stable across different measures.
+From Table 2, we can see that the predictive accuracy of the four models are very close. The performance of these models differ quite a bit in terms of the area under the ROC and PR Curve. For area under the ROC curve, Random Forest performs the best, followed by Logistic Regression, Neural Network, and finally SVM. SVM just performs slightly better than a random classifier. For area under the PR curve, Logistic Regression performs the best, followed by Neural Network, SVM, and finally Random Forest. Among the four, the performance of Random Forest is quite stable across different measures.
 
 ## Q4
 ```{r, warning=FALSE}
@@ -300,12 +287,6 @@ prob_yes <- function(object, newdata) {
   predict(object, newdata = newdata, type = "prob")[, "X1"]
 }
 
-set.seed(4567)
-vip(SVMFULLModel, method = "permute", nsim = 5, train = SVMFulldata, 
-    target = "no_shop", metric = "auc", reference_class = "X1", 
-    pred_wrapper = prob_yes)
-
-
 Importance_Forest <-getFeatureImportance(ForestFULLModel)$res 
 
 #Neural Network in the caret package also has no built-in importance score, I have to retrain the model using the full data set
@@ -324,6 +305,7 @@ NNFULLModel <-caret::train(no_shop ~.,
 
 vip(LogitFULLModel,num_features = 5)
 vip(ForestFULLModel,num_features = 5)
+set.seed(1234)
 vip(SVMFULLModel, method = "permute", nsim = 5, train = SVMFulldata, 
     target = "no_shop", metric = "auc", reference_class = "X1", 
     pred_wrapper = prob_yes,num_features = 5)
@@ -334,8 +316,8 @@ vip(NNCV,num_features = 5) #To compare with the neural network model trained usi
 
 ```
 
-Across the five models, gender and health framing, health expert as messenger interact with health framing appear 4 times in the Top 5, education appears 3 times in the Top 5. These features have stronger predictive abilities than other variables. And compare the neural network trained using the full and test data, we can see they share 4 variable in their Top 5, except for gender and health framing. As the importance score is not standardized across models, I would not comment on the relative importance of variables across models. However, given that the 5 models share a lot of variables in their Top 5 important variable, I would say they all more or less rely on these variables when doing prediction and in a sense are similar to each other. 
+Across the five models, gender, health framing, and education always appears in the Top 5. These features have stronger predictive abilities than other variables. And compare the neural network trained using the full and test data, we can see they share 4 variable in their Top 5. As the importance score is not standardized across models, I would not comment on the relative importance of variables across models. However, given that the 5 models share a lot of variables in their Top 5 important variable, I would say they all more or less rely on these variables when doing prediction and in a sense are similar to each other. 
 
 
-This file can be retrieved from https://github.com/sap98fcs/MLHW1/edit/main/HW2.Rmd.
+This file can be retrieved from https://github.com/sap98fcs/MLHW1/blob/main/HW2.Rmd.
 
