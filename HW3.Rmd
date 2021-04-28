@@ -1,0 +1,209 @@
+---
+title: "597 HW3"
+author: "Gary Fong"
+date: "2021/4/29"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy=TRUE,tidy.opts=list(width.cutoff=60))
+```
+
+```{r, include=FALSE}
+options(repos=structure(c(CRAN="http://cran.r-project.org")))
+
+
+library(mlr)
+library(parallelMap)
+library(parallel)
+library(mgcv)
+library(gamclass)
+library(caroline)
+library(stargazer)
+library(mgcv)
+library(caret)
+library(knitr)
+library(vip)
+library(haven)
+library(caTools)
+
+```
+
+## Q1 
+This data of this homework comes from a published article in The Review of Economics and Statistics, - Nunn & Puga. (2012). RUGGEDNESS: THE BLESSING OF BAD GEOGRAPHY IN AFRICA. 
+
+The paper can be downloaded here https://scholar.harvard.edu/files/nunn/files/ruggedness.pdf. And the data is available at https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VEHPPS.
+
+In this paper, the authors aim to study the differential effects of terrain ruggedness on economy in African and the rest of the world. The authors argue that ruggedness in general has a negative impact on economy, but not in Africa. The reason is that ruggedness helped protect African countries from slave trade in the past hundreds of years, which had a long-term negative impacts on the African local economy. In this paper, the dependent variable is the log of GDP of countries in 2000, and the main explanatory variable is the terrain ruggedness and its interaction with a binary variable indicating whether the country is in African or not. 
+
+The results of the main regression table (Table 1), is replicated as below:
+ 
+```{r, warning=FALSE}
+#read the data and modified as needed
+
+data <- read_dta("https://github.com/sap98fcs/Machine-Learning/blob/main/rugged_data.dta?raw=true")
+
+data$ln_rgdppc_2000 <- log(data$rgdppc_2000)
+data$rugged_x_africa <- data$rugged*data$cont_africa
+data$diamonds <- data$gemstones/(data$land_area/100)
+data$diamonds_x_africa <- data$diamonds*data$cont_africa
+data$soil_x_africa <- data$soil*data$cont_africa
+data$tropical_x_africa <- data$tropical*data$cont_africa
+data$dist_coast_x_africa <- data$dist_coast*data$cont_africa
+
+#regression with cluster S.D
+m.1 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa, data = data)
+
+m.2 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa+diamonds+diamonds_x_africa, data = data)
+
+m.3 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa+soil+soil_x_africa, data = data)
+
+m.4 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa+tropical+tropical_x_africa, data = data)
+
+m.5 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa+dist_coast+dist_coast_x_africa, data = data)
+
+m.6 <- lm(ln_rgdppc_2000  ~ rugged+rugged_x_africa+cont_africa+diamonds+diamonds_x_africa+soil+soil_x_africa+tropical+tropical_x_africa+dist_coast+dist_coast_x_africa, data = data)
+
+stargazer(m.1,m.2,m.3, type = "text",
+          dep.var.caption = "Dependent variables:")
+
+stargazer(m.4,m.5,m.6, type = "text",
+          dep.var.caption = "Dependent variables:")
+```
+
+The S.D is not exactly the same as the original models in the paper use robust standard error. For the sake of convenience, this HW just uses the standard lm fucntion.
+
+## Q2
+```{r, message=FALSE, warning=FALSE}
+
+#remodel the data based on model 2 and split the data
+
+data_newmode <- data[,-c(1:3,5:11,13,16:23,25:51)]
+
+data_newmode <- data_newmode[complete.cases(data_newmode),]
+
+splitdata <- sample.split(Y = data_newmode$ln_rgdppc_2000, SplitRatio = 0.7)
+train_data <- subset(data_newmode, splitdata == "TRUE")
+test_data <- subset(data_newmode, splitdata == "FALSE")
+
+#set the task, and define the learner 
+
+RegTask <- makeRegrTask(data = train_data, target = "ln_rgdppc_2000")
+Reglearner <- makeLearner("regr.lm")
+Regforest <- makeLearner("regr.randomForest")
+
+
+#Tune the hyperparameters for Random Forest#
+
+#set the Random Forest hyperparameters
+forestParamSpace <- makeParamSet(                        
+  makeIntegerParam("ntree", lower = 50, upper = 200),
+  makeIntegerParam("mtry", lower = 1, upper = 10),
+  makeIntegerParam("nodesize", lower = 20, upper = 50),
+  makeIntegerParam("maxnodes", lower = 10, upper = 30))
+
+randSearch <- makeTuneControlRandom(maxit = 100)
+
+#Tuning of the Random Forest Model
+
+kFold <- makeResampleDesc(method = "RepCV", folds = 3, reps = 3)
+
+parallelStartSocket(cpus = detectCores())
+
+tunedForestPars <- tuneParams(Regforest, task = RegTask,     
+                              resampling = kFold,    
+                              par.set = forestParamSpace,   
+                              control = randSearch)         
+
+parallelStop()
+
+#Cross-validation of the three models#
+
+
+#cross-validation of the original model
+
+parallelStartSocket(cpus = detectCores())
+
+lmCV <- resample(Reglearner, RegTask, resampling = kFold)
+
+parallelStop()
+
+#cross-validation of the Random Forest model
+forestWrapper <- makeTuneWrapper(Regforest,
+                                 resampling = kFold,
+                                 par.set = forestParamSpace,
+                                 control = randSearch)
+
+parallelStartSocket(cpus = detectCores())
+
+forestcv <- resample(forestWrapper, 
+                     RegTask, 
+                     resampling = kFold)
+
+parallelStop()
+
+#cross-validation of the gam model
+
+Gam <- CVgam(ln_rgdppc_2000~s(rugged)+s(rugged_x_africa)+cont_africa+s(diamonds)+diamonds_x_africa+s(soil)+s(soil_x_africa)+s(tropical)+s(tropical_x_africa)+s(dist_coast)+s(dist_coast_x_africa), data = train_data,method = "REML")
+
+# report the MSE
+MSE <- cbind(lmCV$aggr,forestcv$aggr,sum((Gam$resid)^2)/length(train_data$rugged))
+colnames(MSE) <- c("OLS Regression","Random Forest","GAM")
+rownames(MSE) <- "MSE in CV"
+kable(MSE, caption="The Mean Square Error of models in Cross-Validation", digits = 4, align ="c" )
+
+```
+
+In this section, I adopt the full model (model 6 in table 1) in the paper. From Table 1, we can see that the mean square error of the GAM and Random Forest Model are much smaller than that of the OLS regression.
+
+## Q3
+```{r, warning=FALSE}
+
+#Train the three models 
+   RegModel <- mlr::train(Reglearner, RegTask)
+   GamModel <- gam(ln_rgdppc_2000~s(rugged)+s(rugged_x_africa)+cont_africa+s(diamonds)+diamonds_x_africa+s(soil)+s(soil_x_africa)+s(tropical)+s(tropical_x_africa)+s(dist_coast)+s(dist_coast_x_africa), data = train_data, method = "REML")
+ForestModel <- mlr::train(setHyperPars(Regforest, par.vals = tunedForestPars$x), RegTask)
+
+#do prediction
+predict_Reg <- predict(RegModel, newdata = test_data)$data
+predict_GAM <- predict(GamModel, newdata = test_data)
+predict_GAM <- cbind(predict_Reg$truth,as.data.frame(predict_GAM))
+colnames(predict_GAM) <- c("truth", "response")
+predict_Forest <- predict(ForestModel, newdata = test_data)$data
+
+#Benchmarking the Mean Square Error
+
+predict_Reg_error <- sum((predict_Reg$truth - predict_Reg$response)^2)/length(test_data$rugged)
+predict_GAM_error <- sum((predict_GAM$truth - predict_GAM$response)^2)/length(test_data$rugged)
+predict_Forest_error <- sum((predict_Forest$truth - predict_Forest$response)^2)/length(test_data$rugged)
+
+Performance <- cbind(predict_Reg_error,predict_Forest_error, predict_GAM_error)
+colnames(Performance) <- c("OLS Regression","Random Forest", "GAM")
+rownames(Performance) <- c("MSE in prediction")
+kable(rbind(MSE,Performance), caption="The Mean Square Error of the models in Prediction vs. Cross-Validation", digits = 4, align ="c" )
+
+```
+
+From Table 2, we can see that the mean square error of two models in prediction is lower than that of in the stage of cross-validation, meaning that there is no serious over-fitting in the modeling process. However, the mean square error of the Random Forest model is now the smallest. 
+
+## Q4
+```{r, warning=FALSE}
+mfrow=c(1,2)
+
+vip(RegModel)
+vip(ForestModel)
+
+summary(GamModel) 
+
+plot.gam(GamModel, pages = 9)
+
+
+```
+
+Using the vip function, we can see that the main independent variable in the paper, rugged_x_africa - the interaction term of terrain ruggedness and Africa, is indeed not a very strong explanatory variable in the OLS and Random Forest Model. Although the vip function is not applicable on a GAM object, from the summary of the GAM model we can see that the F statistics of rugged_x_africa is not particularly high too. It means that including this term could not significantly improve the performance of the model. To further exploit the GAM model, I use the plot.gam function to plot the relationship of the smoothed curve and the variables in the model. From these plots, we can see that only two variables - tropical and dist_coast show small changes in the estimated degree of freedom of the smooth (edf) across their full range of values.
+
+This file can be retrieved from https://raw.githubusercontent.com/sap98fcs/Machine-Learning/main/HW3.Rmd
+
